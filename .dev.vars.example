@@ -1,0 +1,8 @@
+# 复制为 .dev.vars 后填写；真实值只能保留在本地，文件已被 Git 忽略。
+# 不要在这份 example 文件中填写真实值。
+BOT_TOKEN=""
+MY_ADMIN_ID=""
+WEBHOOK_SECRET=""
+TURNSTILE_SITE_KEY=""
+TURNSTILE_SECRET=""
+WELCOME_IMAGE=""

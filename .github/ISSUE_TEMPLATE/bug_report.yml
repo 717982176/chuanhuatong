@@ -1,0 +1,32 @@
+name: 问题报告
+description: 提供经过脱敏的复现信息
+title: '[Bug] '
+body:
+  - type: markdown
+    attributes:
+      value: 不要公开 Token、私钥、真实访客消息、ID 或备份。安全漏洞请先阅读 SECURITY.md。
+  - type: input
+    id: version
+    attributes:
+      label: 版本或提交
+      description: 填写使用版本、Node / Wrangler 版本及 Telegram 客户端。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 使用合成访客和消息，写清触发操作。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏诊断
+      description: 分享前手动检查，避免复制完整日志或 API 地址。

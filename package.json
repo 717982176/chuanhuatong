@@ -1,0 +1,30 @@
+{
+  "name": "chuanhuatong",
+  "version": "1.0.0",
+  "description": "Telegram 私聊传话筒，运行于 Cloudflare Workers / Durable Objects / KV。",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node scripts/test.mjs",
+    "build": "wrangler deploy --dry-run --config wrangler.example.jsonc --outdir dist",
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "set-webhook": "node --env-file-if-exists=.dev.vars scripts/webhook.mjs set",
+    "webhook-info": "node --env-file-if-exists=.dev.vars scripts/webhook.mjs info",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.147.0",
+    "miniflare": "5.20261001.0-alpha"
+  },
+  "author": "717982176",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/717982176/chuanhuatong.git"
+  }
+}

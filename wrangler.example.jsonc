@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "chuanhuatong",
+  "main": "chuanhuatong.js",
+  "compatibility_date": "2026-10-04",
+  "keep_vars": true,
+  "workers_dev": true,
+  "preview_urls": false,
+  "kv_namespaces": [{
+    "binding": "BOT_KV",
+    // 必须替换成你自己的命名空间 ID；升级时继续使用原来的 ID。
+    "id": "00000000000000000000000000000000"
+  }],
+  "durable_objects": {
+    "bindings": [{ "name": "BOT_STATE", "class_name": "BotCoordinator" }]
+  },
+  "exports": {
+    "BotCoordinator": { "type": "durable-object", "storage": "sqlite" }
+  }
+}
