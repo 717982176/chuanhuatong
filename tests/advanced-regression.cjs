@@ -37,7 +37,7 @@ function legacy(entries=[],metadata={}){
   const kv={data,metadata,operations,failWrites:false,
     get:async key=>{operations.push({op:'get',key});if(Array.isArray(key))return new Map(key.map(k=>[k,data.get(k)??null]));return data.get(key)??null;},
     list:async({prefix='',cursor,limit=1000})=>{operations.push({op:'list',prefix});const names=[...data.keys()].sort().filter(k=>k.startsWith(prefix)&&(!cursor||k>cursor));const selected=names.slice(0,limit);return {keys:selected.map(name=>({name,...metadata[name]})),list_complete:names.length<=limit,cursor:names.length>limit?selected.at(-1):''};},
-    put:async(key,value,options={})=>{operations.push({op:'put',key});if(kv.failWrites)throw Error('KV unavailable');if(writes.has(key)&&clock-writes.get(key)<1000)throw Error('same key write limit');writes.set(key,clock);data.set(key,value);metadata[key]={expiration:options.expiration,metadata:options.metadata};},
+    put:async(key,value,options={})=>{operations.push({op:'put',key});if(kv.failWrites)throw Error('KV unavailable');if(writes.has(key)&&clock-writes.get(key)<1000)throw Error('same key write limit');writes.set(key,clock);data.set(key,value);metadata[key]={expiration:options.expiration ?? (options.expirationTtl ? Math.floor(clock/1000)+options.expirationTtl : undefined),metadata:options.metadata};},
     delete:async key=>{operations.push({op:'delete',key});if(kv.failWrites)throw Error('KV unavailable');data.delete(key);delete metadata[key];}};
   return kv;
 }
@@ -224,6 +224,20 @@ const errorText=()=>requests.filter(r=>['sendMessage','editMessageText'].include
     const t=instance(legacy([['auth_2','true']]));const snapshot=await t.bot.createBackup();downloadBody=JSON.stringify(snapshot);apiHook=async method=>method==='getFile'?Response.json({ok:true,result:{file_path:'documents/file.json',file_size:downloadBody.length}}):null;await runtime.setActiveAdminTarget(t.bot.store,'1','2','张');await t.bot.fetch(callback('quick_replies'));const quick=quickPayload().payload.reply_markup.inline_keyboard[0][0].callback_data;
     await t.bot.store.delete('auth_2');await t.bot.fetch(update(1,1,'',{document:{file_id:'json',file_name:'chuanhuatong-backup-test.json',file_size:downloadBody.length}}));assert.equal(await t.bot.store.get('auth_2'),null);assert.match(errorText(),/恢复预览/);assert.equal(noAdminCopies().length,0);await t.bot.fetch(callback('restore_confirm:'+restoreNonce(t)));assert.equal(await t.bot.store.get('auth_2'),'true');await t.bot.fetch(callback(quick));assert.equal(requests.filter(r=>r.method==='sendMessage'&&r.payload.chat_id==='2').length,0);
     await runtime.setActiveAdminTarget(t.bot.store,'1','2','张');await t.bot.fetch(update(1,2,'',{document:{file_id:'normal',file_name:'normal.json',file_size:3}}));assert.equal(noAdminCopies().length,1);await t.drain();
+  });
+  await test('旧备份毫秒到期在验签后规范化，已过期记录不会恢复',async()=>{
+    const t=instance(),expiry=clock+300000;
+    const snapshot=await signBackup(t,[{key:'replied_2',value:'true',expiration:expiry,metadata:{updatedAt:clock}},{key:'replied_3',value:'true',expiration:clock-1000,metadata:null}]);
+    await assert.rejects(runtime.validateBackup({...snapshot,entries:snapshot.entries.map(e=>({...e,expiration:Math.floor(e.expiration/1000)}))},'1'),/校验失败/);
+    await t.bot.stageRestore(snapshot,rCfg(t));const result=await t.bot.restoreBackup(restoreNonce(t));
+    assert.equal(result.restored,1);assert.equal(result.expired,1);assert.equal(await t.bot.store.get('replied_3'),null);
+    assert.equal((await t.storage.get('v:replied_2')).expiration,Math.floor(expiry/1000));
+    assert.equal((await t.storage.get('v:replied_2')).metadata.updatedAt,clock);
+  });
+  await test('镜像重试延迟参与alarm调度，但新任务仍能及时唤醒',async()=>{
+    const t=instance();await t.bot.store.put('auth_2','true');t.kv.failWrites=true;
+    for(let i=0;i<3;i++){await t.bot.store.flushMirrors();const job=await t.storage.get('o:auth_2');await t.bot.rescheduleAlarm();assert.equal(t.storage.alarm,job.mirrorRetryAt);clock=job.mirrorRetryAt;}
+    await t.bot.store.put('auth_3','true');await t.bot.rescheduleAlarm();assert.equal(t.storage.alarm,clock+2000);
   });
   console.log(passed+' advanced checks passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1,6 +1,6 @@
 {
   "name": "chuanhuatong",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Telegram 私聊传话筒，运行于 Cloudflare Workers / Durable Objects / KV。",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
     "deploy": "wrangler deploy --config wrangler.jsonc",
     "set-webhook": "node --env-file-if-exists=.dev.vars scripts/webhook.mjs set",
     "webhook-info": "node --env-file-if-exists=.dev.vars scripts/webhook.mjs info",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs && node scripts/kv-smoke.mjs"
   },
   "devDependencies": {
     "wrangler": "4.147.0",

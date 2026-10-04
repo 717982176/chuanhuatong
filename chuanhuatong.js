@@ -3311,7 +3311,9 @@ export class BotCoordinator extends DurableObject {
     const snapshot = await validateBackup(pending.snapshot, adminId);
     const current = await backupEntries(this.store, adminId);
     await this.createBackup("before_restore");
-    const now = Math.floor(Date.now() / 1000), restored = snapshot.entries.filter((entry) => !entry.expiration || entry.expiration > now);
+    const now = Math.floor(Date.now() / 1000), restored = snapshot.entries
+      .map((entry) => ({ ...entry, expiration: normalizeKvExpiration(entry.expiration) }))
+      .filter((entry) => !entry.expiration || entry.expiration > now);
     const desired = new Map(restored.map((entry) => [entry.key, entry]));
     const keys = new Set([...current.map((entry) => entry.key), ...snapshot.entries.map((entry) => entry.key), `active_admin_${adminId}`, `admin_input_${adminId}`, `admin_restore_input_${adminId}`, `admin_search_${adminId}`]);
     // 恢复后使旧快捷回复菜单失效，防止旧菜单继续使用恢复前的模板。
@@ -3453,8 +3455,9 @@ export class BotCoordinator extends DurableObject {
   }
 
   async rescheduleAlarm() {
-    const pending = await this.ctx.storage.list({ prefix: "o:", limit: 1 });
-    let due = Date.now() + (pending.size ? 2000 : 60 * 60 * 1000);
+    const pending = await this.ctx.storage.list({ prefix: "o:", limit: 40 });
+    let due = Date.now() + (pending.size === 40 ? 2000 : 60 * 60 * 1000);
+    for (const record of pending.values()) due = Math.min(due, Math.max(Date.now() + 2000, Number(record.mirrorRetryAt) || 0));
     const jobs = await listNativeRecords(this.ctx.storage, "a:");
     for (const job of jobs.values()) if (["pending", "sending", "sent"].includes(job.state)) due = Math.min(due, Math.max(Date.now() + 1, Number(job.dueAt) || Date.now() + 1));
     for (const job of (await listNativeRecords(this.ctx.storage, "e:")).values()) due = Math.min(due, Math.max(Date.now() + 1, job.dueAt));
@@ -3598,6 +3601,18 @@ export class BotCoordinator extends DurableObject {
   }
 }
 
+const KV_MAX_TTL = 2147483647;
+
+function normalizeKvExpiration(value) {
+  if (value === undefined || value === null || value === 0) return null;
+  // Only the expiration field accepts historical millisecond timestamps.
+  // Message/profile timestamps and metadata continue to use milliseconds.
+  if (typeof value !== "number" && !(typeof value === "string" && /^\d+$/.test(value))) throw new TypeError("KV expiration must be a positive integer timestamp");
+  const expiration = Number(value);
+  if (!Number.isSafeInteger(expiration) || expiration <= 0) throw new TypeError("KV expiration must be a positive integer timestamp");
+  return expiration >= 1e12 ? Math.floor(expiration / 1000) : expiration;
+}
+
 class CoordinatedStore {
   constructor(storage, legacy) {
     this.storage = storage;
@@ -3611,7 +3626,9 @@ class CoordinatedStore {
   }
 
   active(record) {
-    return record && !record.deleted && (!record.expiration || record.expiration > Date.now() / 1000);
+    if (!record || record.deleted) return false;
+    const expiration = normalizeKvExpiration(record.expiration);
+    return !expiration || expiration > Date.now() / 1000;
   }
 
   async get(key, type = "text") {
@@ -3638,7 +3655,7 @@ class CoordinatedStore {
           const listing = await this.legacy.list({ prefix: key, limit: 1 });
           const info = listing.keys.find((item) => item.name === key);
           metadata = info?.metadata ?? null;
-          expiration = info?.expiration || null;
+          expiration = normalizeKvExpiration(info?.expiration);
         }
       }
       record = { value, metadata, expiration, deleted: value === null, revision: 0 };
@@ -3660,8 +3677,14 @@ class CoordinatedStore {
   }
 
   async put(key, value, options = {}) {
+    let expiration = normalizeKvExpiration(options.expiration);
+    if (!expiration && options.expirationTtl !== undefined) {
+      const ttl = Number(options.expirationTtl);
+      if (!Number.isSafeInteger(ttl) || ttl < 1 || ttl > KV_MAX_TTL) throw new TypeError("KV expirationTtl must be between 1 and 2147483647 seconds");
+      expiration = Math.floor(Date.now() / 1000) + ttl;
+    }
     await this.write(key, { value: String(value), deleted: false, metadata: options.metadata ?? null,
-      expiration: options.expiration || (options.expirationTtl ? Math.floor(Date.now() / 1000) + options.expirationTtl : null) });
+      expiration });
   }
 
   async delete(key) {
@@ -3698,7 +3721,7 @@ class CoordinatedStore {
         for (const info of page.keys) {
           if (current.has(`v:${info.name}`)) continue;
           const value = values.get(info.name) ?? null;
-          entries[`v:${info.name}`] = { value, deleted: value === null, metadata: info.metadata ?? null, expiration: info.expiration || null, revision: 0 };
+          entries[`v:${info.name}`] = { value, deleted: value === null, metadata: info.metadata ?? null, expiration: normalizeKvExpiration(info.expiration), revision: 0 };
         }
         if (Object.keys(entries).length) await txn.put(entries);
         await txn.put(marker, { done: !!page.list_complete, cursor: page.cursor });
@@ -3713,7 +3736,7 @@ class CoordinatedStore {
     if (cursor) options.startAfter = decodeURIComponent(cursor);
     const records = await this.storage.list(options);
     const keys = [];
-    for (const [name, record] of records) if (this.active(record)) keys.push({ name: name.slice(2), metadata: record.metadata, expiration: record.expiration || undefined });
+    for (const [name, record] of records) if (this.active(record)) keys.push({ name: name.slice(2), metadata: record.metadata, expiration: normalizeKvExpiration(record.expiration) || undefined });
     const complete = records.size < options.limit;
     return { keys, list_complete: complete, cursor: complete ? "" : encodeURIComponent([...records.keys()].at(-1)) };
   }
@@ -3725,13 +3748,26 @@ class CoordinatedStore {
     let failedCount = 0, lastError = "";
     for (const [jobKey, record] of jobs) {
       const key = jobKey.slice(2);
+      if (Number(record.mirrorRetryAt) > Date.now()) continue;
       const last = Number(await this.storage.get(`m:${key}`)) || 0;
       if (Date.now() - last < 1200) continue;
       try {
-        if (!this.active(record) || (record.expiration && record.expiration - Date.now() / 1000 < 60)) await this.legacy.delete(key);
+        const expiration = normalizeKvExpiration(record.expiration);
+        if (expiration !== record.expiration) {
+          await this.storage.transaction(async (txn) => {
+            for (const name of [jobKey, `v:${key}`]) {
+              const current = await txn.get(name);
+              if (current?.revision === record.revision) await txn.put(name, { ...current, expiration });
+            }
+          });
+        }
+        const remaining = expiration ? Math.floor(expiration - Date.now() / 1000) : null;
+        if (record.deleted || (remaining !== null && remaining < 60)) await this.legacy.delete(key);
         else {
           const options = {};
-          if (record.expiration) options.expiration = record.expiration;
+          // Native KV options are int32. Relative TTL also supports absolute
+          // expiry dates beyond 2038 without extending the local lifetime.
+          if (remaining !== null) options.expirationTtl = Math.min(KV_MAX_TTL, remaining);
           if (record.metadata !== null) options.metadata = record.metadata;
           await this.legacy.put(key, record.value, options);
         }
@@ -3743,7 +3779,16 @@ class CoordinatedStore {
       } catch (error) {
         failedCount++;
         lastError = String(error?.message || error);
-        // 下次 alarm 重试；即时授权已在协调器持久化，不依赖 KV 同步成功。
+        // Persist backoff across instance restarts. New writes reset it;
+        // a failed older revision must not postpone a newer value.
+        await this.storage.transaction(async (txn) => {
+          const newest = await txn.get(jobKey);
+          if (newest?.revision !== record.revision) return;
+          const attempts = Math.min(11, (Number(newest.mirrorAttempts) || 0) + 1);
+          await txn.put(jobKey, { ...newest, mirrorAttempts: attempts,
+            mirrorRetryAt: Date.now() + Math.min(900000, 2000 * 2 ** (attempts - 1)) });
+        });
+        // 即时授权已在协调器持久化，不依赖 KV 同步成功。
       }
     }
     if (jobs.size === 40) await this.storage.put(marker, [...jobs.keys()].at(-1));
