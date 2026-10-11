@@ -19,7 +19,7 @@
     "smoke": "node scripts/smoke.mjs && node scripts/kv-smoke.mjs"
   },
   "devDependencies": {
-    "wrangler": "4.147.0",
+    "wrangler": "4.148.0",
     "miniflare": "5.20261001.0-alpha"
   },
   "author": "717982176",
